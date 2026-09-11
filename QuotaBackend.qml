@@ -1,0 +1,294 @@
+import QtQuick
+import Quickshell
+import Quickshell.Io
+
+// Backend controller for Antigravity multi-account quota polling,
+// caching, and in-panel account management.
+Item {
+  id: root
+
+  readonly property string fetchScriptPath: {
+    var u = Qt.resolvedUrl("scripts/fetch_quota.py").toString()
+    return u.startsWith("file://") ? u.slice(7) : u
+  }
+
+  readonly property string accountsScriptPath: {
+    var u = Qt.resolvedUrl("scripts/accounts.py").toString()
+    return u.startsWith("file://") ? u.slice(7) : u
+  }
+
+  property var quotaData: null
+  property bool loading: false
+  property string activeEmail: ""
+  property var accounts: []
+  property string selectedEmail: ""
+  property var currentAccount: null
+  property string lastError: ""
+  property double lastUpdated: 0
+
+  // Account addition state
+  property bool addingAccount: false
+  property string addAccountStatus: ""
+  property string addAccountError: ""
+  property bool removingAccount: false
+
+  // Refresh interval in seconds (default 300s = 5m)
+  property int refreshIntervalSec: 300
+
+  signal quotaUpdated()
+
+  function updateCurrentAccount() {
+    if (!root.accounts || root.accounts.length === 0) {
+      root.currentAccount = null
+      return
+    }
+
+    var targetEmail = root.selectedEmail || root.activeEmail
+    var matched = null
+    for (var i = 0; i < root.accounts.length; i++) {
+      if (root.accounts[i].email === targetEmail) {
+        matched = root.accounts[i]
+        break
+      }
+    }
+    root.currentAccount = matched || root.accounts[0]
+  }
+
+  function selectAccount(email) {
+    root.selectedEmail = email
+    root.updateCurrentAccount()
+  }
+
+  function refresh(force) {
+    if (root.loading) return
+    root.loading = true
+    root.lastError = ""
+
+    var cmd = ["python3", root.fetchScriptPath, "--json"]
+    if (force) {
+      cmd.push("--force")
+    }
+    fetchProc.command = cmd
+    fetchProc.running = true
+  }
+
+  function cycleAccount() {
+    if (!root.accounts || root.accounts.length <= 1) return
+    var curIdx = -1
+    for (var i = 0; i < root.accounts.length; i++) {
+      if (root.accounts[i].email === (root.currentAccount ? root.currentAccount.email : "")) {
+        curIdx = i
+        break
+      }
+    }
+    var nextIdx = (curIdx + 1) % root.accounts.length
+    var nextAccount = root.accounts[nextIdx]
+    if (nextAccount) {
+      root.selectAccount(nextAccount.email)
+      switchProc.command = ["python3", root.accountsScriptPath, "switch", nextAccount.email]
+      switchProc.running = true
+    }
+  }
+
+  function startAddAccount() {
+    if (root.addingAccount) {
+      root.cancelAddAccount()
+    }
+    root.addingAccount = true
+    root.addAccountStatus = "正在等待浏览器授权... 请在打开的网页中完成 Google 登录"
+    root.addAccountError = ""
+    addProc.command = ["python3", root.accountsScriptPath, "add"]
+    addProc.running = true
+  }
+
+  function cancelAddAccount() {
+    if (addProc.running) {
+      addProc.running = false
+    }
+    cancelPendingProc.command = ["python3", root.accountsScriptPath, "cancel-pending"]
+    cancelPendingProc.running = true
+    root.addingAccount = false
+    root.addAccountStatus = ""
+    root.addAccountError = ""
+  }
+
+  function submitCallbackUrl(url) {
+    if (!url || !url.trim()) return
+    root.addAccountStatus = "正在解析回调并保存账号..."
+    root.addAccountError = ""
+    pasteCallbackProc.command = ["python3", root.accountsScriptPath, "paste-callback", url.trim()]
+    pasteCallbackProc.running = true
+  }
+
+  function addAccountManual(email, token) {
+    if (!email || !token || root.addingAccount) return
+    root.addingAccount = true
+    root.addAccountStatus = "正在验证并保存账号..."
+    root.addAccountError = ""
+    addManualProc.targetEmail = email.trim()
+    addManualProc.command = ["python3", root.accountsScriptPath, "add-token", email.trim(), token.trim()]
+    addManualProc.running = true
+  }
+
+  function removeAccount(email) {
+    if (!email || root.removingAccount) return
+    root.removingAccount = true
+    removeProc.targetEmail = email.trim()
+    removeProc.command = ["python3", root.accountsScriptPath, "remove", email.trim()]
+    removeProc.running = true
+  }
+
+  Process {
+    id: fetchProc
+    stdout: StdioCollector {
+      id: fetchOut
+      waitForEnd: true
+    }
+    onExited: function(code) {
+      root.loading = false
+      if (code !== 0) {
+        root.lastError = "Fetch exited with code " + code
+        console.warn("[antigravity.usage] Fetch error:", code)
+        return
+      }
+
+      var text = fetchOut.text.trim()
+      if (!text) {
+        root.lastError = "Empty quota output"
+        return
+      }
+
+      try {
+        var parsed = JSON.parse(text)
+        root.quotaData = parsed
+        root.accounts = parsed.accounts || []
+        root.activeEmail = parsed.activeEmail || ""
+        root.lastUpdated = Date.now()
+        root.updateCurrentAccount()
+        root.quotaUpdated()
+      } catch (err) {
+        root.lastError = "JSON parse error: " + err
+        console.error("[antigravity.usage] Parse error:", err, text)
+      }
+    }
+  }
+
+  Process {
+    id: addProc
+    stdout: StdioCollector {
+      waitForEnd: true
+    }
+    onExited: function(code) {
+      root.addingAccount = false
+      if (code === 0) {
+        root.addAccountStatus = "账号添加成功！"
+        root.addAccountError = ""
+        root.refresh(true)
+      } else {
+        if (!root.addAccountStatus || root.addAccountStatus.indexOf("成功") === -1) {
+          root.addAccountError = "授权已取消或失败"
+          root.addAccountStatus = ""
+        }
+      }
+    }
+  }
+
+  Process {
+    id: pasteCallbackProc
+    stdout: StdioCollector {
+      id: pasteOut
+      waitForEnd: true
+    }
+    onExited: function(code) {
+      if (code === 0) {
+        root.addingAccount = false
+        if (addProc.running) {
+          addProc.running = false
+        }
+        root.addAccountStatus = "账号添加成功！"
+        root.addAccountError = ""
+        root.refresh(true)
+        try {
+          var res = JSON.parse(pasteOut.text.trim())
+          if (res && res.email) {
+            root.selectAccount(res.email)
+          }
+        } catch (e) {}
+      } else {
+        root.addAccountError = "解析回调失败，请确认粘贴了包含 code= 的完整 URL"
+      }
+    }
+  }
+
+  Process {
+    id: cancelPendingProc
+    stdout: StdioCollector {
+      waitForEnd: true
+    }
+  }
+
+  Process {
+    id: addManualProc
+    property string targetEmail: ""
+    stdout: StdioCollector {
+      waitForEnd: true
+    }
+    onExited: function(code) {
+      root.addingAccount = false
+      if (code === 0) {
+        root.addAccountStatus = "账号添加成功！"
+        root.addAccountError = ""
+        root.refresh(true)
+        if (addManualProc.targetEmail) {
+          root.selectAccount(addManualProc.targetEmail)
+        }
+      } else {
+        root.addAccountError = "Token 验证失败，请确认填写正确"
+        root.addAccountStatus = ""
+      }
+    }
+  }
+
+  Process {
+    id: removeProc
+    property string targetEmail: ""
+    stdout: StdioCollector {
+      waitForEnd: true
+    }
+    onExited: function(code) {
+      root.removingAccount = false
+      if (code === 0) {
+        if (root.selectedEmail === removeProc.targetEmail) {
+          root.selectedEmail = ""
+        }
+        root.refresh(true)
+      } else {
+        root.lastError = "移除账号失败"
+      }
+    }
+  }
+
+  Process {
+    id: switchProc
+    stdout: StdioCollector {
+      waitForEnd: true
+    }
+    onExited: function(code) {
+      if (code === 0) {
+        root.refresh(false)
+      }
+    }
+  }
+
+  Timer {
+    id: pollTimer
+    interval: Math.max(60, root.refreshIntervalSec) * 1000
+    repeat: true
+    running: true
+    onTriggered: root.refresh(false)
+  }
+
+  Component.onCompleted: {
+    root.refresh(false)
+  }
+}

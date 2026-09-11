@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "antigravity.usage",
+  "name": "Antigravity Usage",
+  "version": "1.0.0",
+  "author": "zhouatie",
+  "license": "MIT",
+  "description": "Multi-account Antigravity AI quota and remaining usage monitor for Omarchy",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Antigravity Usage",
+    "description": "Monitor multi-account Antigravity quotas, reset countdowns, and manage accounts directly in the panel.",
+    "category": "Status",
+    "defaultSection": "center",
+    "allowMultiple": false,
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "showPercentage": true
+    }
+  }
+}
