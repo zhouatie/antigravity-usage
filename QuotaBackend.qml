@@ -43,7 +43,7 @@ Item {
       return
     }
 
-    var targetEmail = root.selectedEmail || root.activeEmail
+    var targetEmail = root.activeEmail
     var matched = null
     for (var i = 0; i < root.accounts.length; i++) {
       if (root.accounts[i].email === targetEmail) {
@@ -55,8 +55,15 @@ Item {
   }
 
   function selectAccount(email) {
-    root.selectedEmail = email
+    root.switchAccount(email)
+  }
+
+  function switchAccount(email) {
+    if (!email) return
+    root.activeEmail = email
     root.updateCurrentAccount()
+    switchProc.command = ["python3", root.accountsScriptPath, "switch", email]
+    switchProc.running = true
   }
 
   function refresh(force) {
@@ -75,18 +82,17 @@ Item {
   function cycleAccount() {
     if (!root.accounts || root.accounts.length <= 1) return
     var curIdx = -1
+    var current = root.activeEmail || (root.currentAccount ? root.currentAccount.email : "")
     for (var i = 0; i < root.accounts.length; i++) {
-      if (root.accounts[i].email === (root.currentAccount ? root.currentAccount.email : "")) {
+      if (root.accounts[i].email === current) {
         curIdx = i
         break
       }
     }
     var nextIdx = (curIdx + 1) % root.accounts.length
     var nextAccount = root.accounts[nextIdx]
-    if (nextAccount) {
-      root.selectAccount(nextAccount.email)
-      switchProc.command = ["python3", root.accountsScriptPath, "switch", nextAccount.email]
-      switchProc.running = true
+    if (nextAccount && nextAccount.email) {
+      root.switchAccount(nextAccount.email)
     }
   }
 

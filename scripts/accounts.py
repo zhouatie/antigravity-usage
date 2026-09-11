@@ -590,6 +590,34 @@ def cmd_switch(args: argparse.Namespace) -> int:
 
     data["activeEmail"] = email
     save_accounts_data(data)
+
+    # Sync cache file immediately to prevent old cache from reverting activeEmail
+    cache_file = Path.home() / ".cache" / "omarchy" / "agent-usage" / "antigravity-multi-quota.json"
+    if cache_file.is_file():
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cdata = json.load(f)
+            if isinstance(cdata, dict) and "accounts" in cdata:
+                cdata["activeEmail"] = email
+                active_res = None
+                for a in cdata.get("accounts", []):
+                    is_act = (a.get("email") == email)
+                    a["isActive"] = is_act
+                    if is_act:
+                        active_res = a
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump(cdata, f, indent=2, ensure_ascii=False)
+
+                if active_res:
+                    try:
+                        from fetch_quota import sync_omarchy_agent_state
+                        sync_omarchy_agent_state(active_res)
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"[warn] Failed to sync cache on switch: {e}", file=sys.stderr)
+
+    send_notification("Antigravity 账号已切换", f"当前活跃: {email}")
     print(f"[ok] Active account switched to: {email}")
     return 0
 

@@ -44,6 +44,12 @@ API_ENDPOINTS = [
     "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
 ]
 
+SUMMARY_API_ENDPOINTS = [
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+]
+
 
 def ensure_dirs() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -118,6 +124,25 @@ def query_cloudcode_models(access_token: str) -> dict[str, Any]:
     return {}
 
 
+def query_cloudcode_quota_summary(access_token: str) -> dict[str, Any]:
+    """Query Cloud Code API for user quota summary (weekly + 5h buckets)."""
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "User-Agent": "antigravity",
+    }
+    for endpoint in SUMMARY_API_ENDPOINTS:
+        req = urllib.request.Request(endpoint, data=b"{}", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(data, dict) and "groups" in data:
+                    return data
+        except Exception:
+            continue
+    return {}
+
+
 def classify_family(model_id: str) -> str:
     m = model_id.lower()
     if "claude" in m:
@@ -146,6 +171,13 @@ def collect_account_quota(account: dict[str, Any]) -> dict[str, Any]:
             "error": f"Token refresh failed: {e}",
             "overallRemaining": 0.0,
             "overallResetFormatted": "Auth error",
+            "weeklyRemaining": 0.0,
+            "weeklyPercent": 0.0,
+            "weeklyResetFormatted": "Auth error",
+            "fiveHourRemaining": 0.0,
+            "fiveHourPercent": 0.0,
+            "fiveHourResetFormatted": "Auth error",
+            "quotaGroups": {},
             "families": {},
             "models": [],
         }
@@ -166,6 +198,13 @@ def collect_account_quota(account: dict[str, Any]) -> dict[str, Any]:
                     "error": f"API request failed after refresh: {retry_err}",
                     "overallRemaining": 0.0,
                     "overallResetFormatted": "Auth error",
+                    "weeklyRemaining": 0.0,
+                    "weeklyPercent": 0.0,
+                    "weeklyResetFormatted": "Auth error",
+                    "fiveHourRemaining": 0.0,
+                    "fiveHourPercent": 0.0,
+                    "fiveHourResetFormatted": "Auth error",
+                    "quotaGroups": {},
                     "families": {},
                     "models": [],
                 }
@@ -176,6 +215,13 @@ def collect_account_quota(account: dict[str, Any]) -> dict[str, Any]:
                 "error": f"API HTTP {e.code}",
                 "overallRemaining": 0.0,
                 "overallResetFormatted": f"HTTP {e.code}",
+                "weeklyRemaining": 0.0,
+                "weeklyPercent": 0.0,
+                "weeklyResetFormatted": f"HTTP {e.code}",
+                "fiveHourRemaining": 0.0,
+                "fiveHourPercent": 0.0,
+                "fiveHourResetFormatted": f"HTTP {e.code}",
+                "quotaGroups": {},
                 "families": {},
                 "models": [],
             }
@@ -186,6 +232,13 @@ def collect_account_quota(account: dict[str, Any]) -> dict[str, Any]:
             "error": f"Network error: {e}",
             "overallRemaining": 0.0,
             "overallResetFormatted": "Network error",
+            "weeklyRemaining": 0.0,
+            "weeklyPercent": 0.0,
+            "weeklyResetFormatted": "Network error",
+            "fiveHourRemaining": 0.0,
+            "fiveHourPercent": 0.0,
+            "fiveHourResetFormatted": "Network error",
+            "quotaGroups": {},
             "families": {},
             "models": [],
         }
@@ -277,13 +330,119 @@ def collect_account_quota(account: dict[str, Any]) -> dict[str, Any]:
     if not family_min_remaining_list:
         overall_min_rem = 1.0
 
+    # Fetch grouped quota summary (weekly + 5h)
+    summary_raw = query_cloudcode_quota_summary(access_token)
+    groups = summary_raw.get("groups", [])
+
+    weekly_mins: list[float] = []
+    weekly_resets: list[str] = []
+    five_hour_mins: list[float] = []
+    five_hour_resets: list[str] = []
+    quota_groups: dict[str, Any] = {}
+
+    for g in groups:
+        g_name = g.get("displayName", "")
+        key = "gemini" if "gemini" in g_name.lower() else "claude"
+        group_item: dict[str, Any] = {
+            "name": g_name,
+            "weeklyRemaining": 1.0,
+            "weeklyPercent": 100.0,
+            "weeklyReset": None,
+            "weeklyResetFormatted": "100% Available",
+            "fiveHourRemaining": 1.0,
+            "fiveHourPercent": 100.0,
+            "fiveHourReset": None,
+            "fiveHourResetFormatted": "100% Available",
+        }
+        for b in g.get("buckets", []):
+            win = b.get("window", "")
+            bid = b.get("bucketId") or ""
+            rem_val = b.get("remainingFraction")
+            rem = float(rem_val) if isinstance(rem_val, (int, float)) else 1.0
+            rem = max(0.0, min(1.0, rem))
+            rst = b.get("resetTime")
+
+            if win == "weekly" or "weekly" in bid:
+                group_item["weeklyRemaining"] = round(rem, 4)
+                group_item["weeklyPercent"] = round(rem * 100, 1)
+                group_item["weeklyReset"] = rst
+                group_item["weeklyResetFormatted"] = format_reset_delta(rst, rem)
+                weekly_mins.append(rem)
+                if rst:
+                    weekly_resets.append(rst)
+            elif win == "5h" or "5h" in bid:
+                group_item["fiveHourRemaining"] = round(rem, 4)
+                group_item["fiveHourPercent"] = round(rem * 100, 1)
+                group_item["fiveHourReset"] = rst
+                group_item["fiveHourResetFormatted"] = format_reset_delta(rst, rem)
+                five_hour_mins.append(rem)
+                if rst:
+                    five_hour_resets.append(rst)
+        quota_groups[key] = group_item
+
+    # Compute overall weekly and 5h
+    if weekly_mins:
+        min_weekly = min(weekly_mins)
+        best_w_reset = sorted(weekly_resets)[0] if weekly_resets else None
+    else:
+        min_weekly = overall_min_rem
+        best_w_reset = None
+
+    if five_hour_mins:
+        min_five_hour = min(five_hour_mins)
+        best_f_reset = sorted(five_hour_resets)[0] if five_hour_resets else None
+    else:
+        min_five_hour = overall_min_rem
+        best_f_reset = overall_next_reset
+
+    final_min_rem = min(overall_min_rem, min_five_hour)
+    final_reset = overall_next_reset or best_f_reset
+
+    # Extract specific Claude and Gemini group stats
+    claude_group = quota_groups.get("claude", {})
+    c_5h_rem = claude_group.get("fiveHourRemaining", families.get("claude", {}).get("remaining", 1.0))
+    c_5h_pct = claude_group.get("fiveHourPercent", families.get("claude", {}).get("remainingPercent", 100.0))
+    c_5h_rst = claude_group.get("fiveHourResetFormatted", families.get("claude", {}).get("resetFormatted", "充裕"))
+    c_w_rem = claude_group.get("weeklyRemaining", 1.0)
+    c_w_pct = claude_group.get("weeklyPercent", 100.0)
+    c_w_rst = claude_group.get("weeklyResetFormatted", "充裕")
+
+    gemini_group = quota_groups.get("gemini", {})
+    g_5h_rem = gemini_group.get("fiveHourRemaining", families.get("gemini_pro", {}).get("remaining", 1.0))
+    g_5h_pct = gemini_group.get("fiveHourPercent", families.get("gemini_pro", {}).get("remainingPercent", 100.0))
+    g_5h_rst = gemini_group.get("fiveHourResetFormatted", families.get("gemini_pro", {}).get("resetFormatted", "充裕"))
+    g_w_rem = gemini_group.get("weeklyRemaining", 1.0)
+    g_w_pct = gemini_group.get("weeklyPercent", 100.0)
+    g_w_rst = gemini_group.get("weeklyResetFormatted", "充裕")
+
     return {
         "email": email,
         "tier": tier,
-        "overallRemaining": round(overall_min_rem, 4),
-        "overallPercent": round(overall_min_rem * 100, 1),
-        "overallResetTime": overall_next_reset,
-        "overallResetFormatted": format_reset_delta(overall_next_reset, overall_min_rem),
+        "claudeFiveHourRemaining": round(c_5h_rem, 4),
+        "claudeFiveHourPercent": round(c_5h_pct, 1),
+        "claudeFiveHourResetFormatted": c_5h_rst,
+        "claudeWeeklyRemaining": round(c_w_rem, 4),
+        "claudeWeeklyPercent": round(c_w_pct, 1),
+        "claudeWeeklyResetFormatted": c_w_rst,
+        "geminiFiveHourRemaining": round(g_5h_rem, 4),
+        "geminiFiveHourPercent": round(g_5h_pct, 1),
+        "geminiFiveHourResetFormatted": g_5h_rst,
+        "geminiWeeklyRemaining": round(g_w_rem, 4),
+        "geminiWeeklyPercent": round(g_w_pct, 1),
+        "geminiWeeklyResetFormatted": g_w_rst,
+        "overallRemaining": round(final_min_rem, 4),
+        "overallPercent": round(final_min_rem * 100, 1),
+        "overallResetTime": final_reset,
+        "overallResetFormatted": format_reset_delta(final_reset, final_min_rem),
+        "weeklyRemaining": round(min_weekly, 4),
+        "weeklyPercent": round(min_weekly * 100, 1),
+        "weeklyResetTime": best_w_reset,
+        "weeklyResetFormatted": format_reset_delta(best_w_reset, min_weekly),
+        "fiveHourRemaining": round(min_five_hour, 4),
+        "fiveHourPercent": round(min_five_hour * 100, 1),
+        "fiveHourResetTime": best_f_reset,
+        "fiveHourResetFormatted": format_reset_delta(best_f_reset, min_five_hour),
+        "quotaGroups": quota_groups,
         "families": families,
         "models": parsed_models,
     }
