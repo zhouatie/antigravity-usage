@@ -50,12 +50,25 @@ BarWidget {
   readonly property var activeAcc: backend.currentAccount
   readonly property var accounts: backend.accounts || []
   readonly property bool loading: backend.loading
-  readonly property double remainingFraction: activeAcc && activeAcc.geminiFiveHourRemaining !== undefined
+
+  readonly property double active5hRem: activeAcc && activeAcc.geminiFiveHourRemaining !== undefined
     ? activeAcc.geminiFiveHourRemaining
     : (activeAcc && activeAcc.overallRemaining !== undefined ? activeAcc.overallRemaining : 1.0)
-  readonly property string percentLabel: activeAcc && activeAcc.geminiFiveHourPercent !== undefined
-    ? Math.round(activeAcc.geminiFiveHourPercent) + "%"
-    : (activeAcc && activeAcc.overallPercent !== undefined ? Math.round(activeAcc.overallPercent) + "%" : "--%")
+  readonly property double activeWeeklyRem: activeAcc && activeAcc.geminiWeeklyRemaining !== undefined
+    ? activeAcc.geminiWeeklyRemaining
+    : (activeAcc && activeAcc.weeklyRemaining !== undefined ? activeAcc.weeklyRemaining : 1.0)
+  readonly property double remainingFraction: Math.min(active5hRem, activeWeeklyRem)
+
+  readonly property double active5hPct: activeAcc && activeAcc.geminiFiveHourPercent !== undefined
+    ? activeAcc.geminiFiveHourPercent
+    : (activeAcc && activeAcc.overallPercent !== undefined ? activeAcc.overallPercent : 100.0)
+  readonly property double activeWeeklyPct: activeAcc && activeAcc.geminiWeeklyPercent !== undefined
+    ? activeAcc.geminiWeeklyPercent
+    : (activeAcc && activeAcc.weeklyPercent !== undefined ? activeAcc.weeklyPercent : 100.0)
+  readonly property string percentLabel: !activeAcc
+    ? "--%"
+    : (Math.round(Math.min(active5hPct, activeWeeklyPct)) + "%")
+
   readonly property string resetLabel: activeAcc && activeAcc.geminiFiveHourResetFormatted
     ? activeAcc.geminiFiveHourResetFormatted
     : (activeAcc && activeAcc.overallResetFormatted ? activeAcc.overallResetFormatted : "")
@@ -869,6 +882,11 @@ BarWidget {
                     ? modelData.geminiWeeklyPercent : 100.0
                   readonly property string gWReset: modelData.geminiWeeklyResetFormatted || "充裕"
 
+                  // 瓶颈与综合状态
+                  readonly property double bottleneckRem: Math.min(gRem, gWRem)
+                  readonly property double bottleneckPct: Math.min(gPct, gWPct)
+                  readonly property double minRem: Math.min(gRem, cRem, gWRem, cWRem)
+
                   // 删除确认状态
                   property bool showConfirmDelete: false
 
@@ -930,7 +948,7 @@ BarWidget {
                           width: Style.space(6)
                           height: Style.space(6)
                           radius: Style.space(3)
-                          color: cardRoot.isActive ? root.catppuccin.blue : root.quotaColor(cardRoot.fRemaining)
+                          color: cardRoot.isActive ? root.catppuccin.blue : root.quotaColor(cardRoot.minRem)
                           anchors.verticalCenter: parent.verticalCenter
                         }
 
@@ -1009,11 +1027,11 @@ BarWidget {
                       width: parent.width
                       spacing: Style.space(12)
 
-                      // Left: Ring Progress Chart (Canvas based, Catppuccin)
+                      // Left: Dual Concentric Ring Chart (Canvas based, 5h Outer + Weekly Inner)
                       Item {
                         id: ringContainer
-                        width: Style.space(56)
-                        height: Style.space(56)
+                        width: Style.space(58)
+                        height: Style.space(58)
                         anchors.verticalCenter: parent.verticalCenter
 
                         Canvas {
@@ -1021,11 +1039,15 @@ BarWidget {
                           anchors.fill: parent
                           antialiasing: true
 
-                          readonly property double fraction: Math.max(0.0, Math.min(1.0, cardRoot.gRem))
-                          readonly property color strokeCol: root.quotaColor(cardRoot.gRem)
+                          readonly property double fraction5h: Math.max(0.0, Math.min(1.0, cardRoot.gRem))
+                          readonly property double fractionWeekly: Math.max(0.0, Math.min(1.0, cardRoot.gWRem))
+                          readonly property color stroke5h: root.quotaColor(cardRoot.gRem)
+                          readonly property color strokeWeekly: root.quotaColor(cardRoot.gWRem)
 
-                          onFractionChanged: ringCanvas.requestPaint()
-                          onStrokeColChanged: ringCanvas.requestPaint()
+                          onFraction5hChanged: ringCanvas.requestPaint()
+                          onFractionWeeklyChanged: ringCanvas.requestPaint()
+                          onStroke5hChanged: ringCanvas.requestPaint()
+                          onStrokeWeeklyChanged: ringCanvas.requestPaint()
                           Component.onCompleted: ringCanvas.requestPaint()
 
                           onPaint: {
@@ -1035,50 +1057,74 @@ BarWidget {
 
                             var cx = width / 2
                             var cy = height / 2
-                            var lw = Style.space(4.5)
-                            var r = (Math.min(width, height) - lw) / 2 - 1
 
-                            // 1. Background Track
+                            // 1. Outer Ring: 5-Hour Limit
+                            var lwOuter = Style.space(3.6)
+                            var rOuter = (Math.min(width, height) - lwOuter) / 2 - 1
+
+                            // Outer Track
                             ctx.beginPath()
-                            ctx.arc(cx, cy, r, 0, Math.PI * 2, false)
+                            ctx.arc(cx, cy, rOuter, 0, Math.PI * 2, false)
                             ctx.strokeStyle = root.catppuccin.surface0
-                            ctx.lineWidth = lw
+                            ctx.lineWidth = lwOuter
                             ctx.stroke()
 
-                            // 2. Progress Arc
+                            // Outer Progress Arc
                             var startAngle = -Math.PI / 2
-                            var sweepAngle = ringCanvas.fraction * Math.PI * 2
-                            if (sweepAngle > 0.001) {
+                            var sweepOuter = ringCanvas.fraction5h * Math.PI * 2
+                            if (sweepOuter > 0.005) {
                               ctx.beginPath()
-                              ctx.arc(cx, cy, r, startAngle, startAngle + sweepAngle, false)
-                              ctx.strokeStyle = ringCanvas.strokeCol
-                              ctx.lineWidth = lw
+                              ctx.arc(cx, cy, rOuter, startAngle, startAngle + sweepOuter, false)
+                              ctx.strokeStyle = ringCanvas.stroke5h
+                              ctx.lineWidth = lwOuter
+                              ctx.lineCap = "round"
+                              ctx.stroke()
+                            }
+
+                            // 2. Inner Ring: Weekly Limit
+                            var lwInner = Style.space(2.6)
+                            var rInner = rOuter - (lwOuter / 2) - Style.space(2.4) - (lwInner / 2)
+
+                            // Inner Track
+                            ctx.beginPath()
+                            ctx.arc(cx, cy, rInner, 0, Math.PI * 2, false)
+                            ctx.strokeStyle = root.catppuccin.surface0
+                            ctx.lineWidth = lwInner
+                            ctx.stroke()
+
+                            // Inner Progress Arc
+                            var sweepInner = ringCanvas.fractionWeekly * Math.PI * 2
+                            if (sweepInner > 0.005) {
+                              ctx.beginPath()
+                              ctx.arc(cx, cy, rInner, startAngle, startAngle + sweepInner, false)
+                              ctx.strokeStyle = ringCanvas.strokeWeekly
+                              ctx.lineWidth = lwInner
                               ctx.lineCap = "round"
                               ctx.stroke()
                             }
                           }
                         }
 
-                        // Center Percentage Label
+                        // Center Percentage Label & Bottleneck Indicator
                         Column {
                           anchors.centerIn: parent
                           spacing: 0
 
                           Text {
                             anchors.horizontalCenter: parent.horizontalCenter
-                            text: Math.round(cardRoot.gPct) + "%"
-                            color: root.quotaColor(cardRoot.gRem)
+                            text: Math.round(cardRoot.bottleneckPct) + "%"
+                            color: root.quotaColor(cardRoot.bottleneckRem)
                             font.family: Style.font.family
-                            font.pixelSize: Style.font.caption
+                            font.pixelSize: Style.font.caption * 0.92
                             font.bold: true
                           }
 
                           Text {
                             anchors.horizontalCenter: parent.horizontalCenter
-                            text: "Gemini"
-                            color: root.catppuccin.sapphire
+                            text: (cardRoot.bottleneckPct === cardRoot.gWPct && cardRoot.gWPct < cardRoot.gPct) ? "周瓶颈" : "5h·周"
+                            color: (cardRoot.bottleneckPct === cardRoot.gWPct && cardRoot.gWPct < 50) ? root.catppuccin.peach : root.catppuccin.overlay1
                             font.family: Style.font.family
-                            font.pixelSize: Style.font.caption * 0.72
+                            font.pixelSize: Style.font.caption * 0.65
                             font.bold: true
                           }
                         }
@@ -1127,7 +1173,7 @@ BarWidget {
                               anchors.right: parent.right
                               anchors.verticalCenter: parent.verticalCenter
                               text: (cardRoot.gPct < 99.9 ? ("5h " + cardRoot.gPct.toFixed(0) + "% (" + cardRoot.gReset + ")") : "5h 100%") + " · 周 " + cardRoot.gWPct.toFixed(0) + "%"
-                              color: root.quotaColor(cardRoot.gRem)
+                              color: root.quotaColor(Math.min(cardRoot.gRem, cardRoot.gWRem))
                               font.family: Style.font.family
                               font.pixelSize: Style.font.caption * 0.82
                               font.bold: true
@@ -1190,7 +1236,7 @@ BarWidget {
                               anchors.right: parent.right
                               anchors.verticalCenter: parent.verticalCenter
                               text: (cardRoot.cPct < 99.9 ? ("5h " + cardRoot.cPct.toFixed(0) + "% (" + cardRoot.cReset + ")") : "5h 100%") + " · 周 " + cardRoot.cWPct.toFixed(0) + "%"
-                              color: root.quotaColor(cardRoot.cRem)
+                              color: root.quotaColor(Math.min(cardRoot.cRem, cardRoot.cWRem))
                               font.family: Style.font.family
                               font.pixelSize: Style.font.caption * 0.82
                               font.bold: true
