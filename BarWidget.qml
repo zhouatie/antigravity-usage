@@ -11,7 +11,7 @@ import qs.Commons
 // provides instant access to detailed usage panel with Catppuccin-themed 2-column cards.
 BarWidget {
   id: root
-  moduleName: "antigravity.usage"
+  moduleName: "antigravity.manager"
 
   readonly property string glyph: "🤖"
 
@@ -51,24 +51,12 @@ BarWidget {
   readonly property var accounts: backend.accounts || []
   readonly property bool loading: backend.loading
 
-  readonly property double active5hRem: activeAcc && activeAcc.geminiFiveHourRemaining !== undefined
+  readonly property double remainingFraction: activeAcc && activeAcc.geminiFiveHourRemaining !== undefined
     ? activeAcc.geminiFiveHourRemaining
     : (activeAcc && activeAcc.overallRemaining !== undefined ? activeAcc.overallRemaining : 1.0)
-  readonly property double activeWeeklyRem: activeAcc && activeAcc.geminiWeeklyRemaining !== undefined
-    ? activeAcc.geminiWeeklyRemaining
-    : (activeAcc && activeAcc.weeklyRemaining !== undefined ? activeAcc.weeklyRemaining : 1.0)
-  readonly property double remainingFraction: Math.min(active5hRem, activeWeeklyRem)
-
-  readonly property double active5hPct: activeAcc && activeAcc.geminiFiveHourPercent !== undefined
-    ? activeAcc.geminiFiveHourPercent
-    : (activeAcc && activeAcc.overallPercent !== undefined ? activeAcc.overallPercent : 100.0)
-  readonly property double activeWeeklyPct: activeAcc && activeAcc.geminiWeeklyPercent !== undefined
-    ? activeAcc.geminiWeeklyPercent
-    : (activeAcc && activeAcc.weeklyPercent !== undefined ? activeAcc.weeklyPercent : 100.0)
-  readonly property string percentLabel: !activeAcc
-    ? "--%"
-    : (Math.round(Math.min(active5hPct, activeWeeklyPct)) + "%")
-
+  readonly property string percentLabel: activeAcc && activeAcc.geminiFiveHourPercent !== undefined
+    ? Math.round(activeAcc.geminiFiveHourPercent) + "%"
+    : (activeAcc && activeAcc.overallPercent !== undefined ? Math.round(activeAcc.overallPercent) + "%" : "--%")
   readonly property string resetLabel: activeAcc && activeAcc.geminiFiveHourResetFormatted
     ? activeAcc.geminiFiveHourResetFormatted
     : (activeAcc && activeAcc.overallResetFormatted ? activeAcc.overallResetFormatted : "")
@@ -278,7 +266,7 @@ BarWidget {
               }
 
               Text {
-                text: "Antigravity Quota"
+                text: "Antigravity Manager"
                 color: root.catppuccin.text
                 font.family: Style.font.family
                 font.pixelSize: Style.font.title
@@ -312,6 +300,50 @@ BarWidget {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(6)
+
+              // Proxy Server Toggle Button
+              Rectangle {
+                id: proxyToggleBtn
+                height: Style.space(28)
+                width: proxyRow.implicitWidth + Style.space(14)
+                radius: Style.space(6)
+                color: backend.proxyRunning
+                  ? Qt.rgba(166/255, 227/255, 161/255, 0.18)
+                  : (proxyToggleArea.containsMouse ? root.catppuccin.surface1 : root.catppuccin.surface0)
+                border.color: backend.proxyRunning ? root.catppuccin.green : root.catppuccin.surface1
+                border.width: 1
+
+                MouseArea {
+                  id: proxyToggleArea
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: backend.toggleProxy()
+                }
+
+                Row {
+                  id: proxyRow
+                  anchors.centerIn: parent
+                  spacing: Style.space(5)
+
+                  Rectangle {
+                    width: Style.space(6)
+                    height: Style.space(6)
+                    radius: Style.space(3)
+                    color: backend.proxyRunning ? root.catppuccin.green : root.catppuccin.subtext0
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    text: backend.togglingProxy ? "切换中..." : (backend.proxyRunning ? "反代 :8045" : "启动反代")
+                    color: backend.proxyRunning ? root.catppuccin.green : root.catppuccin.subtext0
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    font.bold: backend.proxyRunning
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                }
+              }
 
               // Add Account Button
               Rectangle {
@@ -893,6 +925,11 @@ BarWidget {
                   width: (accountsGrid.width - accountsGrid.columnSpacing) / 2
                   implicitHeight: cardContent.implicitHeight + Style.space(20)
                   radius: Style.space(10)
+                  opacity: (cardRoot.modelData.enabled !== false ? 1.0 : 0.65)
+
+                  Behavior on opacity {
+                    NumberAnimation { duration: 150 }
+                  }
 
                   // Catppuccin Card Background
                   color: isActive
@@ -990,6 +1027,44 @@ BarWidget {
                             color: root.catppuccin.blue
                             font.family: Style.font.family
                             font.pixelSize: Style.font.caption * 0.85
+                            font.bold: true
+                          }
+                        }
+
+                        // Enable / Disable in Proxy Pool
+                        Rectangle {
+                          id: enableToggleBtn
+                          height: Style.space(18)
+                          width: enableToggleText.implicitWidth + Style.space(10)
+                          radius: Style.space(9)
+                          color: (cardRoot.modelData.enabled !== false)
+                            ? Qt.rgba(148/255, 226/255, 213/255, 0.18)
+                            : Qt.rgba(108/255, 112/255, 134/255, 0.20)
+                          border.color: (cardRoot.modelData.enabled !== false)
+                            ? root.catppuccin.teal
+                            : root.catppuccin.overlay0
+                          border.width: 1
+                          anchors.verticalCenter: parent.verticalCenter
+
+                          MouseArea {
+                            id: enableToggleArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                              backend.toggleAccount(cardRoot.modelData.email)
+                            }
+                          }
+
+                          Text {
+                            id: enableToggleText
+                            anchors.centerIn: parent
+                            text: (cardRoot.modelData.enabled !== false) ? "池:开" : "池:关"
+                            color: (cardRoot.modelData.enabled !== false)
+                              ? root.catppuccin.teal
+                              : root.catppuccin.overlay1
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.82
                             font.bold: true
                           }
                         }

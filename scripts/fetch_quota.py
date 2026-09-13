@@ -506,12 +506,21 @@ def fetch_all_quotas(force: bool = False, cache_ttl: int = 300) -> dict[str, Any
                 with open(CACHE_FILE, "r", encoding="utf-8") as f:
                     cached = json.load(f)
                     if isinstance(cached, dict) and "accounts" in cached:
+                        # Overlay current enabled status & activeEmail from accounts.json
+                        data = load_accounts_data()
+                        enabled_map = {a.get("email"): a.get("enabled", True) for a in data.get("accounts", [])}
+                        active_email = data.get("activeEmail", "")
+                        cached["activeEmail"] = active_email
+                        for ca in cached.get("accounts", []):
+                            em = ca.get("email")
+                            ca["enabled"] = enabled_map.get(em, True)
+                            ca["isActive"] = (em == active_email)
                         return cached
         except Exception:
             pass
 
     data = load_accounts_data()
-    accounts = [a for a in data.get("accounts", []) if a.get("enabled", True)]
+    accounts = data.get("accounts", [])
     active_email = data.get("activeEmail", "")
 
     collected_accounts: list[dict[str, Any]] = []
@@ -520,6 +529,7 @@ def fetch_all_quotas(force: bool = False, cache_ttl: int = 300) -> dict[str, Any
         acc_email = acc.get("email", "")
         quota_res = collect_account_quota(acc)
         quota_res["isActive"] = (acc_email == active_email)
+        quota_res["enabled"] = acc.get("enabled", True)
         collected_accounts.append(quota_res)
 
     # Save updated access tokens in accounts data

@@ -35,6 +35,11 @@ Item {
   // Refresh interval in seconds (default 300s = 5m)
   property int refreshIntervalSec: 300
 
+  // Proxy state
+  property bool proxyRunning: false
+  property int proxyPort: 8045
+  property bool togglingProxy: false
+
   signal quotaUpdated()
 
   function updateCurrentAccount() {
@@ -144,6 +149,38 @@ Item {
     removeProc.running = true
   }
 
+  function checkProxyStatus() {
+    proxyStatusProc.running = false
+    proxyStatusProc.command = ["python3", root.accountsScriptPath, "proxy", "status", "--json"]
+    proxyStatusProc.running = true
+  }
+
+  function toggleProxy() {
+    if (root.togglingProxy) return
+    root.togglingProxy = true
+    var action = root.proxyRunning ? "stop" : "start"
+    root.proxyRunning = !root.proxyRunning
+    proxyToggleProc.running = false
+    proxyToggleProc.command = ["python3", root.accountsScriptPath, "proxy", action]
+    proxyToggleProc.running = true
+  }
+
+  function toggleAccount(email) {
+    if (!email) return
+    if (root.accounts) {
+      for (var i = 0; i < root.accounts.length; i++) {
+        if (root.accounts[i].email === email) {
+          root.accounts[i].enabled = !(root.accounts[i].enabled !== false)
+          break
+        }
+      }
+      root.accounts = root.accounts.slice()
+    }
+    toggleAccountProc.running = false
+    toggleAccountProc.command = ["python3", root.accountsScriptPath, "toggle", email]
+    toggleAccountProc.running = true
+  }
+
   Process {
     id: fetchProc
     stdout: StdioCollector {
@@ -154,7 +191,7 @@ Item {
       root.loading = false
       if (code !== 0) {
         root.lastError = "Fetch exited with code " + code
-        console.warn("[antigravity.usage] Fetch error:", code)
+        console.warn("[antigravity.manager] Fetch error:", code)
         return
       }
 
@@ -174,7 +211,7 @@ Item {
         root.quotaUpdated()
       } catch (err) {
         root.lastError = "JSON parse error: " + err
-        console.error("[antigravity.usage] Parse error:", err, text)
+        console.error("[antigravity.manager] Parse error:", err, text)
       }
     }
   }
@@ -286,15 +323,62 @@ Item {
     }
   }
 
+  Process {
+    id: proxyStatusProc
+    stdout: StdioCollector {
+      id: proxyStatusOut
+      waitForEnd: true
+    }
+    onExited: function(code) {
+      try {
+        var txt = proxyStatusOut.text.trim()
+        var lastBrace = txt.lastIndexOf("{")
+        if (lastBrace !== -1) {
+          var parsed = JSON.parse(txt.slice(lastBrace))
+          root.proxyRunning = !!parsed.running
+          root.proxyPort = parsed.port || 8045
+          return
+        }
+      } catch (e) {}
+      root.proxyRunning = (code === 0)
+    }
+  }
+
+  Process {
+    id: proxyToggleProc
+    stdout: StdioCollector {
+      waitForEnd: true
+    }
+    onExited: function(code) {
+      root.togglingProxy = false
+      root.checkProxyStatus()
+    }
+  }
+
+  Process {
+    id: toggleAccountProc
+    stdout: StdioCollector {
+      waitForEnd: true
+    }
+    onExited: function(code) {
+      root.refresh(false)
+      root.checkProxyStatus()
+    }
+  }
+
   Timer {
     id: pollTimer
     interval: Math.max(60, root.refreshIntervalSec) * 1000
     repeat: true
     running: true
-    onTriggered: root.refresh(false)
+    onTriggered: {
+      root.refresh(false)
+      root.checkProxyStatus()
+    }
   }
 
   Component.onCompleted: {
     root.refresh(false)
+    root.checkProxyStatus()
   }
 }

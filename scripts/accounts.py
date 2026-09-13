@@ -622,6 +622,151 @@ def cmd_switch(args: argparse.Namespace) -> int:
     return 0
 
 
+PID_FILE = CONFIG_DIR / ".antigravity-proxy.pid"
+LOG_FILE = Path.home() / ".cache" / "omarchy" / "antigravity-proxy.log"
+
+
+def is_process_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def cmd_proxy(args: argparse.Namespace) -> int:
+    action = args.action
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    if action == "status":
+        running = False
+        pid = None
+        if PID_FILE.is_file():
+            try:
+                pid = int(PID_FILE.read_text().strip())
+                running = is_process_running(pid)
+            except Exception:
+                pass
+
+        health_data = None
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8045/health", timeout=0.5) as resp:
+                health_data = json.loads(resp.read())
+                running = True
+        except Exception:
+            if not (pid and running):
+                running = False
+
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "running": running,
+                "pid": pid,
+                "port": 8045,
+                "health": health_data,
+            }, indent=2))
+            return 0
+        else:
+            if running:
+                print(f"[ok] Proxy running on 127.0.0.1:8045 (PID: {pid})")
+            else:
+                print("[info] Proxy is not running")
+        return 0 if running else 1
+
+    elif action == "stop":
+        stopped = False
+        if PID_FILE.is_file():
+            try:
+                pid = int(PID_FILE.read_text().strip())
+                if is_process_running(pid):
+                    os.kill(pid, 15)
+                    time.sleep(0.3)
+                    if is_process_running(pid):
+                        os.kill(pid, 9)
+                    stopped = True
+            except Exception:
+                pass
+            PID_FILE.unlink(missing_ok=True)
+
+        # Fallback: terminate any leftover proxy_server.py
+        try:
+            for p in Path("/proc").glob("[0-9]*"):
+                try:
+                    cmdline = (p / "cmdline").read_bytes().replace(b"\x00", b" ").decode()
+                    if "proxy_server.py" in cmdline and str(os.getpid()) not in cmdline:
+                        os.kill(int(p.name), 9)
+                        stopped = True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        print("[ok] Proxy stopped")
+        return 0
+
+    elif action in ("start", "restart"):
+        if action == "restart":
+            if PID_FILE.is_file():
+                try:
+                    pid = int(PID_FILE.read_text().strip())
+                    if is_process_running(pid):
+                        os.kill(pid, 15)
+                        time.sleep(0.5)
+                except Exception:
+                    pass
+                PID_FILE.unlink(missing_ok=True)
+
+        if PID_FILE.is_file():
+            try:
+                pid = int(PID_FILE.read_text().strip())
+                if is_process_running(pid):
+                    print(f"[warn] Proxy already running (PID: {pid})")
+                    return 0
+            except Exception:
+                pass
+
+        proxy_script = Path(__file__).resolve().parent / "proxy_server.py"
+        log_f = open(LOG_FILE, "a", encoding="utf-8")
+        proc = subprocess.Popen(
+            [sys.executable, str(proxy_script), "--port", str(args.port), "--host", args.host],
+            stdout=log_f,
+            stderr=log_f,
+            start_new_session=True,
+        )
+        PID_FILE.write_text(str(proc.pid))
+        time.sleep(0.8)
+
+        if is_process_running(proc.pid):
+            print(f"[ok] Proxy started on http://{args.host}:{args.port} (PID: {proc.pid})")
+            return 0
+        else:
+            print(f"[error] Proxy failed to start. Check logs at {LOG_FILE}", file=sys.stderr)
+            PID_FILE.unlink(missing_ok=True)
+            return 1
+
+    return 0
+
+
+def cmd_toggle(args: argparse.Namespace) -> int:
+    email = args.email
+    data = load_accounts_data()
+    found = False
+    new_state = True
+    for acc in data.get("accounts", []):
+        if acc.get("email") == email:
+            current = acc.get("enabled", True)
+            new_state = not current
+            acc["enabled"] = new_state
+            found = True
+            break
+    if not found:
+        print(f"[error] Account not found: {email}", file=sys.stderr)
+        return 1
+    save_accounts_data(data)
+    state_str = "enabled" if new_state else "disabled"
+    print(f"[ok] Account {email} is now {state_str}")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     data = load_accounts_data()
     res = {
@@ -674,7 +819,22 @@ def main() -> int:
     # cancel-pending
     cancel_p = subparsers.add_parser("cancel-pending", help="Cancel pending OAuth session and release port")
 
+    # toggle
+    toggle_p = subparsers.add_parser("toggle", help="Toggle account enabled/disabled state")
+    toggle_p.add_argument("email", help="Account email")
+
+    # proxy
+    proxy_p = subparsers.add_parser("proxy", help="Manage background reverse proxy server")
+    proxy_p.add_argument("action", choices=["start", "stop", "restart", "status"], help="Action")
+    proxy_p.add_argument("--port", type=int, default=8045, help="Port (default: 8045)")
+    proxy_p.add_argument("--host", default="127.0.0.1", help="Host (default: 127.0.0.1)")
+    proxy_p.add_argument("--json", action="store_true", help="JSON output for status")
+
     args = parser.parse_args()
+    if args.command == "toggle":
+        return cmd_toggle(args)
+    if args.command == "proxy":
+        return cmd_proxy(args)
     if args.command == "list":
         return cmd_list(args)
     if args.command == "add":
