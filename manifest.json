@@ -20,7 +20,8 @@
     "allowMultiple": false,
     "defaults": {
       "refreshIntervalSec": 300,
-      "showPercentage": true
+      "showPercentage": true,
+      "showClaude": false
     }
   }
 }

@@ -76,6 +76,19 @@ BarWidget {
     return catppuccin.red
   }
 
+  function formatResetZh(resetStr) {
+    if (!resetStr || resetStr === "充裕" || resetStr === "100% Available") {
+      return "充足"
+    }
+    if (resetStr === "Ready now") {
+      return "已就绪"
+    }
+    var s = resetStr
+    if (s.indexOf("in ") === 0) s = s.slice(3)
+    s = s.replace(/d\s*/, "天").replace(/h\s*/, "h").replace(/m\s*/, "m").replace(/\s+/g, "")
+    return s + "后"
+  }
+
   readonly property string tooltipInfo: {
     var lines = ["Antigravity 配额监控 (Catppuccin)"]
     if (activeAcc) {
@@ -106,6 +119,7 @@ BarWidget {
   property bool panelOpen: false
   readonly property bool opened: root.panelOpen
   property bool showAddSection: false
+  property bool showClaude: root.setting("showClaude", false)
   property string addMode: "oauth"  // "oauth" or "manual"
 
   function open() { root.panelOpen = true }
@@ -815,26 +829,77 @@ BarWidget {
             width: parent.width
             spacing: Style.space(8)
 
-            // Grid Section Header
-            Row {
+            // Grid Section Header with Claude Toggle
+            Item {
               width: parent.width
-              spacing: Style.space(6)
+              height: Style.space(24)
 
-              Text {
-                text: "账号配额矩阵"
-                color: root.catppuccin.subtext0
-                font.family: Style.font.family
-                font.pixelSize: Style.font.caption
-                font.bold: true
+              Row {
+                anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(6)
+
+                Text {
+                  text: "账号配额矩阵"
+                  color: root.catppuccin.subtext0
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  text: "(点击卡片切换活跃账号)"
+                  color: root.catppuccin.overlay0
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption * 0.85
+                  anchors.verticalCenter: parent.verticalCenter
+                }
               }
 
-              Text {
-                text: "(左侧圆环为 Gemini 5h 剩余额度 · 点击卡片切换活跃账号)"
-                color: root.catppuccin.overlay0
-                font.family: Style.font.family
-                font.pixelSize: Style.font.caption * 0.9
+              // Claude Toggle Button
+              Rectangle {
+                anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
+                height: Style.space(22)
+                width: claudeToggleRow.implicitWidth + Style.space(16)
+                radius: Style.space(11)
+                color: root.showClaude
+                  ? Qt.rgba(203/255, 166/255, 247/255, 0.18)
+                  : root.catppuccin.surface0
+                border.color: root.showClaude ? root.catppuccin.mauve : root.catppuccin.surface1
+                border.width: 1
+
+                MouseArea {
+                  id: claudeToggleArea
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.showClaude = !root.showClaude
+                }
+
+                Row {
+                  id: claudeToggleRow
+                  anchors.centerIn: parent
+                  spacing: Style.space(5)
+
+                  Rectangle {
+                    width: Style.space(6)
+                    height: Style.space(6)
+                    radius: Style.space(3)
+                    color: root.showClaude ? root.catppuccin.mauve : root.catppuccin.overlay0
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    text: root.showClaude ? "展示 Claude" : "显示 Claude"
+                    color: root.showClaude ? root.catppuccin.mauve : root.catppuccin.subtext0
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption * 0.85
+                    font.bold: root.showClaude
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                }
               }
             }
 
@@ -1097,170 +1162,56 @@ BarWidget {
                       }
                     }
 
-                    // 2. Card Middle: Ring Progress Chart + Quota Details (5h & Weekly)
-                    Row {
+                    // 2. Card Quota Breakdown (Clean Linear Hierarchy)
+                    Column {
                       width: parent.width
-                      spacing: Style.space(12)
+                      spacing: Style.space(8)
 
-                      // Left: Dual Concentric Ring Chart (Canvas based, 5h Outer + Weekly Inner)
-                      Item {
-                        id: ringContainer
-                        width: Style.space(58)
-                        height: Style.space(58)
-                        anchors.verticalCenter: parent.verticalCenter
-
-                        Canvas {
-                          id: ringCanvas
-                          anchors.fill: parent
-                          antialiasing: true
-
-                          readonly property double fraction5h: Math.max(0.0, Math.min(1.0, cardRoot.gRem))
-                          readonly property double fractionWeekly: Math.max(0.0, Math.min(1.0, cardRoot.gWRem))
-                          readonly property color stroke5h: root.quotaColor(cardRoot.gRem)
-                          readonly property color strokeWeekly: root.quotaColor(cardRoot.gWRem)
-
-                          onFraction5hChanged: ringCanvas.requestPaint()
-                          onFractionWeeklyChanged: ringCanvas.requestPaint()
-                          onStroke5hChanged: ringCanvas.requestPaint()
-                          onStrokeWeeklyChanged: ringCanvas.requestPaint()
-                          Component.onCompleted: ringCanvas.requestPaint()
-
-                          onPaint: {
-                            var ctx = getContext("2d")
-                            ctx.reset()
-                            ctx.clearRect(0, 0, width, height)
-
-                            var cx = width / 2
-                            var cy = height / 2
-
-                            // 1. Outer Ring: 5-Hour Limit
-                            var lwOuter = Style.space(3.6)
-                            var rOuter = (Math.min(width, height) - lwOuter) / 2 - 1
-
-                            // Outer Track
-                            ctx.beginPath()
-                            ctx.arc(cx, cy, rOuter, 0, Math.PI * 2, false)
-                            ctx.strokeStyle = root.catppuccin.surface0
-                            ctx.lineWidth = lwOuter
-                            ctx.stroke()
-
-                            // Outer Progress Arc
-                            var startAngle = -Math.PI / 2
-                            var sweepOuter = ringCanvas.fraction5h * Math.PI * 2
-                            if (sweepOuter > 0.005) {
-                              ctx.beginPath()
-                              ctx.arc(cx, cy, rOuter, startAngle, startAngle + sweepOuter, false)
-                              ctx.strokeStyle = ringCanvas.stroke5h
-                              ctx.lineWidth = lwOuter
-                              ctx.lineCap = "round"
-                              ctx.stroke()
-                            }
-
-                            // 2. Inner Ring: Weekly Limit
-                            var lwInner = Style.space(2.6)
-                            var rInner = rOuter - (lwOuter / 2) - Style.space(2.4) - (lwInner / 2)
-
-                            // Inner Track
-                            ctx.beginPath()
-                            ctx.arc(cx, cy, rInner, 0, Math.PI * 2, false)
-                            ctx.strokeStyle = root.catppuccin.surface0
-                            ctx.lineWidth = lwInner
-                            ctx.stroke()
-
-                            // Inner Progress Arc
-                            var sweepInner = ringCanvas.fractionWeekly * Math.PI * 2
-                            if (sweepInner > 0.005) {
-                              ctx.beginPath()
-                              ctx.arc(cx, cy, rInner, startAngle, startAngle + sweepInner, false)
-                              ctx.strokeStyle = ringCanvas.strokeWeekly
-                              ctx.lineWidth = lwInner
-                              ctx.lineCap = "round"
-                              ctx.stroke()
-                            }
-                          }
-                        }
-
-                        // Center Percentage Label & Bottleneck Indicator
-                        Column {
-                          anchors.centerIn: parent
-                          spacing: 0
-
-                          Text {
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            text: Math.round(cardRoot.bottleneckPct) + "%"
-                            color: root.quotaColor(cardRoot.bottleneckRem)
-                            font.family: Style.font.family
-                            font.pixelSize: Style.font.caption * 0.92
-                            font.bold: true
-                          }
-
-                          Text {
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            text: (cardRoot.bottleneckPct === cardRoot.gWPct && cardRoot.gWPct < cardRoot.gPct) ? "周瓶颈" : "5h·周"
-                            color: (cardRoot.bottleneckPct === cardRoot.gWPct && cardRoot.gWPct < 50) ? root.catppuccin.peach : root.catppuccin.overlay1
-                            font.family: Style.font.family
-                            font.pixelSize: Style.font.caption * 0.65
-                            font.bold: true
-                          }
-                        }
-                      }
-
-                      // Right: Gemini and Claude Breakdown
+                      // Gemini Section
                       Column {
-                        width: parent.width - ringContainer.width - Style.space(12)
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: Style.space(6)
+                        width: parent.width
+                        spacing: Style.space(4)
 
-                        // Row 1: Gemini Models (Primary)
-                        Column {
+                        // Model Header
+                        Row {
+                          spacing: Style.space(5)
+                          Rectangle {
+                            width: Style.space(4)
+                            height: Style.space(10)
+                            radius: Style.space(2)
+                            color: root.catppuccin.sapphire
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+                          Text {
+                            text: "Gemini"
+                            color: root.catppuccin.text
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption
+                            font.bold: true
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+                        }
+
+                        // 5h Row
+                        Row {
                           width: parent.width
-                          spacing: Style.space(2)
+                          spacing: Style.space(6)
 
-                          Item {
-                            width: parent.width
-                            height: Math.max(geminiTitle.implicitHeight, geminiValue.implicitHeight)
-
-                            Row {
-                              id: geminiTitle
-                              anchors.left: parent.left
-                              anchors.verticalCenter: parent.verticalCenter
-                              spacing: Style.space(4)
-
-                              Rectangle {
-                                width: Style.space(4)
-                                height: Style.space(8)
-                                radius: Style.space(2)
-                                color: root.catppuccin.sapphire
-                                anchors.verticalCenter: parent.verticalCenter
-                              }
-
-                              Text {
-                                text: "Gemini"
-                                color: root.catppuccin.text
-                                font.family: Style.font.family
-                                font.pixelSize: Style.font.caption * 0.85
-                                font.bold: true
-                              }
-                            }
-
-                            Text {
-                              id: geminiValue
-                              anchors.right: parent.right
-                              anchors.verticalCenter: parent.verticalCenter
-                              text: (cardRoot.gPct < 99.9 ? ("5h " + cardRoot.gPct.toFixed(0) + "% (" + cardRoot.gReset + ")") : "5h 100%") + " · 周 " + cardRoot.gWPct.toFixed(0) + "%"
-                              color: root.quotaColor(Math.min(cardRoot.gRem, cardRoot.gWRem))
-                              font.family: Style.font.family
-                              font.pixelSize: Style.font.caption * 0.82
-                              font.bold: true
-                            }
+                          Text {
+                            text: "5h"
+                            color: root.catppuccin.subtext0
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.85
+                            width: Style.space(16)
+                            anchors.verticalCenter: parent.verticalCenter
                           }
 
-                          // Gemini Mini Progress Bar
                           Rectangle {
-                            width: parent.width
                             height: Style.space(4)
+                            width: Style.space(90)
                             radius: Style.space(2)
                             color: root.catppuccin.surface0
+                            anchors.verticalCenter: parent.verticalCenter
 
                             Rectangle {
                               height: parent.height
@@ -1272,58 +1223,124 @@ BarWidget {
                               }
                             }
                           }
+
+                          Text {
+                            text: cardRoot.gPct.toFixed(0) + "%"
+                            color: root.quotaColor(cardRoot.gRem)
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.85
+                            font.bold: true
+                            width: Style.space(34)
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+
+                          Text {
+                            text: root.formatResetZh(cardRoot.gReset)
+                            color: root.catppuccin.overlay1
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.80
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
                         }
 
-                        // Row 2: Claude & GPT Models
-                        Column {
+                        // Weekly Row
+                        Row {
                           width: parent.width
-                          spacing: Style.space(2)
+                          spacing: Style.space(6)
 
-                          Item {
-                            width: parent.width
-                            height: Math.max(claudeTitle.implicitHeight, claudeValue.implicitHeight)
+                          Text {
+                            text: "周"
+                            color: root.catppuccin.subtext0
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.85
+                            width: Style.space(16)
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
 
-                            Row {
-                              id: claudeTitle
-                              anchors.left: parent.left
-                              anchors.verticalCenter: parent.verticalCenter
-                              spacing: Style.space(4)
+                          Rectangle {
+                            height: Style.space(4)
+                            width: Style.space(90)
+                            radius: Style.space(2)
+                            color: root.catppuccin.surface0
+                            anchors.verticalCenter: parent.verticalCenter
 
-                              Rectangle {
-                                width: Style.space(4)
-                                height: Style.space(8)
-                                radius: Style.space(2)
-                                color: root.catppuccin.mauve
-                                anchors.verticalCenter: parent.verticalCenter
+                            Rectangle {
+                              height: parent.height
+                              width: Math.max(0, Math.min(parent.width, parent.width * cardRoot.gWRem))
+                              radius: Style.space(2)
+                              color: root.quotaColor(cardRoot.gWRem)
+                              Behavior on width {
+                                NumberAnimation { duration: 250; easing.type: Easing.OutQuad }
                               }
-
-                              Text {
-                                text: "Claude"
-                                color: root.catppuccin.text
-                                font.family: Style.font.family
-                                font.pixelSize: Style.font.caption * 0.85
-                                font.bold: true
-                              }
-                            }
-
-                            Text {
-                              id: claudeValue
-                              anchors.right: parent.right
-                              anchors.verticalCenter: parent.verticalCenter
-                              text: (cardRoot.cPct < 99.9 ? ("5h " + cardRoot.cPct.toFixed(0) + "% (" + cardRoot.cReset + ")") : "5h 100%") + " · 周 " + cardRoot.cWPct.toFixed(0) + "%"
-                              color: root.quotaColor(Math.min(cardRoot.cRem, cardRoot.cWRem))
-                              font.family: Style.font.family
-                              font.pixelSize: Style.font.caption * 0.82
-                              font.bold: true
                             }
                           }
 
-                          // Claude Mini Progress Bar
+                          Text {
+                            text: cardRoot.gWPct.toFixed(0) + "%"
+                            color: root.quotaColor(cardRoot.gWRem)
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.85
+                            font.bold: true
+                            width: Style.space(34)
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+
+                          Text {
+                            text: root.formatResetZh(cardRoot.gWReset)
+                            color: root.catppuccin.overlay1
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.80
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+                        }
+                      }
+
+                      // Claude Section (Toggleable)
+                      Column {
+                        visible: root.showClaude
+                        width: parent.width
+                        spacing: Style.space(4)
+
+                        // Model Header
+                        Row {
+                          spacing: Style.space(5)
                           Rectangle {
-                            width: parent.width
+                            width: Style.space(4)
+                            height: Style.space(10)
+                            radius: Style.space(2)
+                            color: root.catppuccin.mauve
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+                          Text {
+                            text: "Claude"
+                            color: root.catppuccin.text
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption
+                            font.bold: true
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+                        }
+
+                        // 5h Row
+                        Row {
+                          width: parent.width
+                          spacing: Style.space(6)
+
+                          Text {
+                            text: "5h"
+                            color: root.catppuccin.subtext0
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.85
+                            width: Style.space(16)
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+
+                          Rectangle {
                             height: Style.space(4)
+                            width: Style.space(90)
                             radius: Style.space(2)
                             color: root.catppuccin.surface0
+                            anchors.verticalCenter: parent.verticalCenter
 
                             Rectangle {
                               height: parent.height
@@ -1334,6 +1351,75 @@ BarWidget {
                                 NumberAnimation { duration: 250; easing.type: Easing.OutQuad }
                               }
                             }
+                          }
+
+                          Text {
+                            text: cardRoot.cPct.toFixed(0) + "%"
+                            color: root.quotaColor(cardRoot.cRem)
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.85
+                            font.bold: true
+                            width: Style.space(34)
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+
+                          Text {
+                            text: root.formatResetZh(cardRoot.cReset)
+                            color: root.catppuccin.overlay1
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.80
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+                        }
+
+                        // Weekly Row
+                        Row {
+                          width: parent.width
+                          spacing: Style.space(6)
+
+                          Text {
+                            text: "周"
+                            color: root.catppuccin.subtext0
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.85
+                            width: Style.space(16)
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+
+                          Rectangle {
+                            height: Style.space(4)
+                            width: Style.space(90)
+                            radius: Style.space(2)
+                            color: root.catppuccin.surface0
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            Rectangle {
+                              height: parent.height
+                              width: Math.max(0, Math.min(parent.width, parent.width * cardRoot.cWRem))
+                              radius: Style.space(2)
+                              color: root.quotaColor(cardRoot.cWRem)
+                              Behavior on width {
+                                NumberAnimation { duration: 250; easing.type: Easing.OutQuad }
+                              }
+                            }
+                          }
+
+                          Text {
+                            text: cardRoot.cWPct.toFixed(0) + "%"
+                            color: root.quotaColor(cardRoot.cWRem)
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.85
+                            font.bold: true
+                            width: Style.space(34)
+                            anchors.verticalCenter: parent.verticalCenter
+                          }
+
+                          Text {
+                            text: root.formatResetZh(cardRoot.cWReset)
+                            color: root.catppuccin.overlay1
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption * 0.80
+                            anchors.verticalCenter: parent.verticalCenter
                           }
                         }
                       }

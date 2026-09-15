@@ -398,7 +398,10 @@ def convert_anthropic_to_gemini(data: dict[str, Any]) -> tuple[str, dict[str, An
     # 3. Generation Config
     gen_config: dict[str, Any] = {}
     if "max_tokens" in data:
-        gen_config["maxOutputTokens"] = data["max_tokens"]
+        max_tokens = data["max_tokens"]
+        if isinstance(max_tokens, int) and max_tokens > 65536:
+            max_tokens = 65536
+        gen_config["maxOutputTokens"] = max_tokens
     if "temperature" in data:
         gen_config["temperature"] = data["temperature"]
     if "top_p" in data:
