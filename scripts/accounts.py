@@ -28,6 +28,7 @@ from typing import Any
 CONFIG_DIR = Path.home() / ".config" / "omarchy"
 ACCOUNTS_FILE = CONFIG_DIR / "antigravity-accounts.json"
 PENDING_OAUTH_FILE = CONFIG_DIR / ".antigravity-oauth-pending.json"
+PI_AUTH_FILE = Path.home() / ".config" / "pi" / "auth.json"
 
 # Public Antigravity / Google Cloud Code desktop client credentials
 CLIENT_ID = os.environ.get("ANTIGRAVITY_CLIENT_ID") or base64.b64decode(
@@ -84,6 +85,52 @@ def save_accounts_data(data: dict[str, Any]) -> None:
             f.write("\n")
         os.chmod(tmp_path, 0o600)
         shutil.move(tmp_path, ACCOUNTS_FILE)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
+def load_pi_auth() -> dict[str, Any]:
+    if PI_AUTH_FILE.is_file():
+        try:
+            with open(PI_AUTH_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    return loaded
+        except Exception as e:
+            print(f"[warn] Failed to read Pi auth file: {e}", file=sys.stderr)
+    return {}
+
+
+def sync_account_to_pi(account: dict[str, Any]) -> None:
+    """Sync the active account's OAuth credentials into ~/.config/pi/auth.json."""
+    if not account or not account.get("refreshToken"):
+        return
+
+    try:
+        refresh_account_token(account)
+    except Exception as e:
+        print(f"[warn] Token refresh before Pi sync failed: {e}", file=sys.stderr)
+
+    pi_auth = load_pi_auth()
+    pi_auth["antigravity"] = {
+        "type": "oauth",
+        "refresh": account.get("refreshToken", ""),
+        "access": account.get("accessToken", ""),
+        "expires": account.get("expiresAt", 0),
+        "projectId": account.get("projectId") or "aicode-consumers",
+        "email": account.get("email", ""),
+    }
+
+    PI_AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=PI_AUTH_FILE.parent, prefix=".pi-auth-", suffix=".tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(pi_auth, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.chmod(tmp_path, 0o600)
+        shutil.move(tmp_path, PI_AUTH_FILE)
     except Exception:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -581,15 +628,53 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
 
 def cmd_switch(args: argparse.Namespace) -> int:
-    email = args.email.strip()
+    email = (args.email or "").strip()
     data = load_accounts_data()
-    account = next((a for a in data.get("accounts", []) if a.get("email") == email), None)
+    accounts = data.get("accounts", [])
+
+    if not email:
+        if not accounts:
+            print("[error] No accounts configured", file=sys.stderr)
+            return 1
+        omarchy_menu = shutil.which("omarchy-menu-select")
+        if omarchy_menu:
+            menu_items = []
+            for a in accounts:
+                em = a.get("email", "")
+                tier = a.get("tier", "Google AI Pro")
+                is_cur = " [Active]" if em == data.get("activeEmail") else ""
+                menu_items.append(f"{em}\t{tier}{is_cur}")
+            try:
+                proc = subprocess.run(
+                    [omarchy_menu, "选择切换的 Antigravity 账号", *menu_items],
+                    stdout=subprocess.PIPE,
+                    text=True,
+                    check=True,
+                )
+                selected = proc.stdout.strip()
+                if not selected:
+                    return 0
+                email = selected.split("\t")[0].strip()
+            except Exception:
+                return 0
+        else:
+            print("[error] Please specify an email to switch", file=sys.stderr)
+            return 1
+
+    account = next((a for a in accounts if a.get("email") == email), None)
     if not account:
         print(f"[error] Account {email} not found", file=sys.stderr)
         return 1
 
     data["activeEmail"] = email
+    data["piActiveEmail"] = email
     save_accounts_data(data)
+
+    # Sync to Pi auth.json
+    try:
+        sync_account_to_pi(account)
+    except Exception as e:
+        print(f"[warn] Failed to sync to Pi auth: {e}", file=sys.stderr)
 
     # Sync cache file immediately to prevent old cache from reverting activeEmail
     cache_file = Path.home() / ".cache" / "omarchy" / "agent-usage" / "antigravity-multi-quota.json"
@@ -617,8 +702,8 @@ def cmd_switch(args: argparse.Namespace) -> int:
         except Exception as e:
             print(f"[warn] Failed to sync cache on switch: {e}", file=sys.stderr)
 
-    send_notification("Antigravity 账号已切换", f"当前活跃: {email}")
-    print(f"[ok] Active account switched to: {email}")
+    send_notification("Antigravity 账号已切换", f"当前活跃: {email} (已同步到 Pi)")
+    print(f"[ok] Active account switched to: {email} (synced to Pi)")
     return 0
 
 
@@ -806,7 +891,7 @@ def main() -> int:
 
     # switch
     sw_p = subparsers.add_parser("switch", help="Switch active account")
-    sw_p.add_argument("email", help="Account email")
+    sw_p.add_argument("email", nargs="?", default=None, help="Account email (opens menu if omitted)")
 
     # status
     status_p = subparsers.add_parser("status", help="Show accounts status")
