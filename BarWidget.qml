@@ -1020,7 +1020,7 @@ BarWidget {
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                      if (!cardRoot.showConfirmDelete) {
+                      if (!cardRoot.showConfirmDelete && !cardRoot.isActive) {
                         backend.switchAccount(cardRoot.modelData.email)
                       }
                     }
@@ -1131,6 +1131,44 @@ BarWidget {
                             font.family: Style.font.family
                             font.pixelSize: Style.font.caption * 0.82
                             font.bold: true
+                          }
+                        }
+
+                        // Single Card Refresh Quota Button
+                        Rectangle {
+                          id: refreshCardBtn
+                          width: Style.space(18)
+                          height: Style.space(18)
+                          radius: Style.space(4)
+                          color: refreshCardArea.containsMouse ? Qt.rgba(137/255, 180/255, 250/255, 0.25) : "transparent"
+                          anchors.verticalCenter: parent.verticalCenter
+
+                          property bool isRefreshing: backend.refreshingEmail === cardRoot.modelData.email
+
+                          MouseArea {
+                            id: refreshCardArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: backend.refreshAccount(cardRoot.modelData.email)
+                          }
+
+                          Text {
+                            anchors.centerIn: parent
+                            text: "↻"
+                            color: (refreshCardArea.containsMouse || refreshCardBtn.isRefreshing)
+                              ? root.catppuccin.blue
+                              : root.catppuccin.overlay0
+                            font.family: Style.font.family
+                            font.pixelSize: Style.font.caption
+
+                            RotationAnimation on rotation {
+                              running: refreshCardBtn.isRefreshing
+                              loops: Animation.Infinite
+                              from: 0
+                              to: 360
+                              duration: 800
+                            }
                           }
                         }
 

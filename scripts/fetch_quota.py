@@ -494,9 +494,100 @@ def sync_omarchy_agent_state(active_account_data: dict[str, Any]) -> None:
         print(f"[warn] Failed to update Omarchy agent state: {e}", file=sys.stderr)
 
 
-def fetch_all_quotas(force: bool = False, cache_ttl: int = 300) -> dict[str, Any]:
+def save_updated_tokens(accounts: list[dict[str, Any]]) -> None:
+    token_map = {
+        a["email"]: (a.get("accessToken"), a.get("expiresAt"))
+        for a in accounts if a.get("email") and a.get("accessToken")
+    }
+    if not token_map:
+        return
+    try:
+        latest_data = load_accounts_data()
+        changed = False
+        for a in latest_data.get("accounts", []):
+            em = a.get("email")
+            if em in token_map:
+                tok, exp = token_map[em]
+                if tok != a.get("accessToken") or exp != a.get("expiresAt"):
+                    a["accessToken"] = tok
+                    a["expiresAt"] = exp
+                    changed = True
+        if changed:
+            save_accounts_data(latest_data)
+    except Exception as e:
+        print(f"[warn] Failed to save updated tokens: {e}", file=sys.stderr)
+
+
+def fetch_all_quotas(
+    force: bool = False,
+    cache_ttl: int = 300,
+    target_email: str | None = None,
+) -> dict[str, Any]:
     ensure_dirs()
     now_ts = time.time()
+
+    data = load_accounts_data()
+    accounts = data.get("accounts", [])
+    active_email = data.get("activeEmail", "")
+
+    # Single-account targeted fetch
+    if target_email:
+        acc = next((a for a in accounts if a.get("email") == target_email), None)
+        if not acc:
+            print(f"[error] Account {target_email} not found", file=sys.stderr)
+            return {"accounts": [], "activeEmail": active_email}
+
+        quota_res = collect_account_quota(acc)
+        save_updated_tokens([acc])
+
+        latest_data = load_accounts_data()
+        active_email = latest_data.get("activeEmail", "")
+        quota_res["isActive"] = (target_email == active_email)
+        quota_res["enabled"] = next(
+            (a.get("enabled", True) for a in latest_data.get("accounts", []) if a.get("email") == target_email),
+            True,
+        )
+
+        cached: dict[str, Any] = {"accounts": [], "activeEmail": active_email}
+        if CACHE_FILE.is_file():
+            try:
+                with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                    c = json.load(f)
+                    if isinstance(c, dict) and "accounts" in c:
+                        cached = c
+            except Exception:
+                pass
+
+        cached["activeEmail"] = active_email
+        cached_accs = cached.get("accounts", [])
+        found = False
+        for i, ca in enumerate(cached_accs):
+            if ca.get("email") == target_email:
+                cached_accs[i] = quota_res
+                found = True
+            else:
+                ca["isActive"] = (ca.get("email") == active_email)
+        if not found:
+            cached_accs.append(quota_res)
+        cached["accounts"] = cached_accs
+        cached["updatedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+
+        if quota_res.get("isActive"):
+            sync_omarchy_agent_state(quota_res)
+
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=CACHE_DIR, prefix=".quota-", suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(cached, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            os.chmod(tmp_path, 0o644)
+            os.replace(tmp_path, CACHE_FILE)
+        except Exception as e:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            print(f"[warn] Failed to cache quota: {e}", file=sys.stderr)
+
+        return cached
 
     # Check cache
     if not force and CACHE_FILE.is_file():
@@ -521,22 +612,23 @@ def fetch_all_quotas(force: bool = False, cache_ttl: int = 300) -> dict[str, Any
 
     data = load_accounts_data()
     accounts = data.get("accounts", [])
-    active_email = data.get("activeEmail", "")
 
     collected_accounts: list[dict[str, Any]] = []
 
     for acc in accounts:
-        acc_email = acc.get("email", "")
         quota_res = collect_account_quota(acc)
-        quota_res["isActive"] = (acc_email == active_email)
-        quota_res["enabled"] = acc.get("enabled", True)
         collected_accounts.append(quota_res)
 
-    # Save updated access tokens in accounts data
-    try:
-        save_accounts_data(data)
-    except Exception:
-        pass
+    save_updated_tokens(accounts)
+
+    latest_data = load_accounts_data()
+    active_email = latest_data.get("activeEmail", "")
+    enabled_map = {a.get("email"): a.get("enabled", True) for a in latest_data.get("accounts", [])}
+
+    for quota_res in collected_accounts:
+        acc_email = quota_res.get("email", "")
+        quota_res["isActive"] = (acc_email == active_email)
+        quota_res["enabled"] = enabled_map.get(acc_email, True)
 
     result = {
         "accounts": collected_accounts,
@@ -572,9 +664,10 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Print structured JSON output")
     parser.add_argument("--force", action="store_true", help="Bypass cache and force fresh fetch")
     parser.add_argument("--cache-ttl", type=int, default=300, help="Cache TTL in seconds (default 300)")
+    parser.add_argument("--email", type=str, default=None, help="Fetch quota only for a specific account email")
 
     args = parser.parse_args()
-    data = fetch_all_quotas(force=args.force, cache_ttl=args.cache_ttl)
+    data = fetch_all_quotas(force=args.force, cache_ttl=args.cache_ttl, target_email=args.email)
 
     if args.json:
         print(json.dumps(data, indent=2, ensure_ascii=False))

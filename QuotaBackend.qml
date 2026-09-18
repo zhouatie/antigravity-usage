@@ -19,6 +19,7 @@ Item {
 
   property var quotaData: null
   property bool loading: false
+  property string refreshingEmail: ""
   property string activeEmail: ""
   property var accounts: []
   property string selectedEmail: ""
@@ -82,6 +83,14 @@ Item {
     }
     fetchProc.command = cmd
     fetchProc.running = true
+  }
+
+  function refreshAccount(email) {
+    if (!email || root.loading || root.refreshingEmail) return
+    root.refreshingEmail = email
+    var cmd = ["python3", root.fetchScriptPath, "--json", "--email", email]
+    fetchAccountProc.command = cmd
+    fetchAccountProc.running = true
   }
 
   function cycleAccount() {
@@ -205,13 +214,47 @@ Item {
         var parsed = JSON.parse(text)
         root.quotaData = parsed
         root.accounts = parsed.accounts || []
-        root.activeEmail = parsed.activeEmail || ""
+        if (!switchProc.running && parsed.activeEmail) {
+          root.activeEmail = parsed.activeEmail
+        }
         root.lastUpdated = Date.now()
         root.updateCurrentAccount()
         root.quotaUpdated()
       } catch (err) {
         root.lastError = "JSON parse error: " + err
         console.error("[antigravity.manager] Parse error:", err, text)
+      }
+    }
+  }
+
+  Process {
+    id: fetchAccountProc
+    stdout: StdioCollector {
+      id: fetchAccountOut
+      waitForEnd: true
+    }
+    onExited: function(code) {
+      root.refreshingEmail = ""
+      if (code !== 0) {
+        console.warn("[antigravity.manager] Single account fetch error:", code)
+        return
+      }
+
+      var text = fetchAccountOut.text.trim()
+      if (!text) return
+
+      try {
+        var parsed = JSON.parse(text)
+        root.quotaData = parsed
+        root.accounts = parsed.accounts || []
+        if (!switchProc.running && parsed.activeEmail) {
+          root.activeEmail = parsed.activeEmail
+        }
+        root.lastUpdated = Date.now()
+        root.updateCurrentAccount()
+        root.quotaUpdated()
+      } catch (err) {
+        console.error("[antigravity.manager] Single account parse error:", err)
       }
     }
   }
