@@ -1,0 +1,14 @@
+scripts/accounts.py
+  h_2c18dbcdf50eba 31,94-139,631,633-664,670,673-678,705-706,894
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1c085ce7a47e6c10b146ccb3376dc5dfdea3ab4f",
+  "prompts": {},
+  "humans": {
+    "h_2c18dbcdf50eba": {
+      "author": "zhouatie <zhouatie@gmail.com>"
+    }
+  }
+}
