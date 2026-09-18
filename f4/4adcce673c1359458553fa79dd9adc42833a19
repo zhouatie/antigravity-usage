@@ -1,0 +1,27 @@
+BarWidget.qml
+  s_b585478f101310::t_238dac311a3119 1023
+  s_b585478f101310::t_a7033976038b80 1137-1174
+QuotaBackend.qml
+  s_b585478f101310::t_cad9a00cac60c3 217-219,230-252
+  s_b585478f101310::t_5b546384157fe1 253-255
+  s_b585478f101310::t_fd39493dfe187d 22,88-95,256-261
+scripts/fetch_quota.py
+  s_b585478f101310::t_0107d20d98ee6e 497-525,529-591,622-631
+  s_b585478f101310::t_c96bc9a5aa4c3c 667,670
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f44adcce673c1359458553fa79dd9adc42833a19",
+  "prompts": {},
+  "sessions": {
+    "s_b585478f101310": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "01a0b49f-2cf8-713c-8fcd-389901fd005c",
+        "model": "gemini-3.8-flash"
+      },
+      "human_author": "zhouatie <zhouatie@gmail.com>"
+    }
+  }
+}
